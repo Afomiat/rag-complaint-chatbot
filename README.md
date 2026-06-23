@@ -29,7 +29,7 @@ LLM reads the chunks and generates a grounded answer
 Answer + source complaints shown to user
 ```
 
-This approach is called **RAG (Retrieval-Augmented Generation)**:
+**RAG (Retrieval-Augmented Generation):**
 - **Retrieval** — semantic search finds relevant complaints from 464K+ records
 - **Augmented** — retrieved complaints are injected into the LLM's context
 - **Generation** — the LLM synthesizes a human-readable answer grounded in real data
@@ -42,20 +42,26 @@ This approach is called **RAG (Retrieval-Augmented Generation)**:
 rag-complaint-chatbot/
 ├── .github/
 │   └── workflows/
-│       └── unittests.yml         # CI/CD pipeline (lint + test on every push)
+│       └── unittests.yml               # CI/CD pipeline (lint + test on every push)
 ├── data/
-│   ├── raw/                      # Original CFPB dataset (not tracked in git)
-│   └── processed/                # Cleaned dataset + plots (not tracked in git)
-├── vector_store/                 # ChromaDB persistent index (not tracked in git)
+│   ├── raw/                            # Original CFPB dataset (not tracked in git)
+│   └── processed/                      # Cleaned dataset + plots (not tracked in git)
+├── vector_store/                       # ChromaDB persistent index (not tracked in git)
 ├── notebooks/
-│   ├── eda_preprocessing.ipynb   # Task 1 — EDA and cleaning
-│   └── chunking_embedding.ipynb  # Task 2 — Chunking, embedding, vector store
+│   ├── eda_preprocessing.ipynb         # Task 1 — EDA and cleaning
+│   ├── chunking_embedding.ipynb        # Task 2 — Chunking, embedding, vector store
+│   └── rag_test.ipynb                  # Task 3 — Pipeline testing and evaluation
 ├── src/
-│   └── __init__.py               # RAG pipeline logic (Task 3)
+│   ├── __init__.py
+│   ├── prompt.py                       # Prompt template builder
+│   ├── retriever.py                    # ChromaDB semantic search
+│   ├── generator.py                    # Groq LLaMA 3.1 API integration
+│   └── rag_pipeline.py                 # Wires retriever + generator together
 ├── tests/
-│   └── __init__.py               # Unit tests
-├── app.py                        # Gradio UI (Task 4)
-├── requirements.txt              # All Python dependencies
+│   └── __init__.py                     # Unit tests
+├── app.py                              # Gradio UI (Task 4)
+├── requirements.txt                    # All Python dependencies
+├── .env                                # API keys (not tracked in git)
 ├── .gitignore
 └── README.md
 ```
@@ -95,8 +101,6 @@ Narrative length stats after cleaning:
 
 **Goal:** Convert cleaned complaint narratives into a searchable vector database.
 
-**What was done:**
-
 **Chunking:**
 - Used `LangChain RecursiveCharacterTextSplitter` with `chunk_size=500`, `chunk_overlap=50`
 - 2,092 complaints → **6,347 chunks** (average 3.0 chunks per complaint)
@@ -109,7 +113,7 @@ Narrative length stats after cleaning:
 
 **Vector Store:**
 - Database: ChromaDB (persistent, saved to `vector_store/chroma_db/`)
-- 6,347 vectors stored with full metadata (complaint_id, product_category, issue, company, state, date_received)
+- 6,347 vectors stored with full metadata per chunk: `complaint_id`, `product_category`, `issue`, `company`, `state`, `date_received`, `chunk_index`
 
 **Semantic search validation:**
 - Query: *"problems with credit card billing"*
@@ -118,29 +122,54 @@ Narrative length stats after cleaning:
 
 ---
 
-### 🔲 Task 3 — RAG Core Logic and Evaluation (`src/`)
+### ✅ Task 3 — RAG Core Logic and Evaluation (`src/`)
 
-**Goal:** Wire the retriever to an LLM to produce grounded, evidence-backed answers.
+**Goal:** Build a modular, production-ready RAG pipeline that wires retrieval to an LLM generator.
 
-**Planned:**
-- Load 10 Academy pre-built ChromaDB vector store (464K complaints, 1.37M chunks)
-- Build retriever: embed query → find top-k=5 most similar chunks
-- Design prompt template that grounds LLM strictly in retrieved context
-- Integrate open-source LLM (Mistral or Llama via HuggingFace)
-- Evaluate with 5–10 test questions, scoring answers 1–5 on relevance and accuracy
+**Modular architecture (`src/`):**
+
+| File | Class | Responsibility |
+|------|-------|---------------|
+| `prompt.py` | `get_prompt_template()` | Builds prompt — injects question + retrieved context |
+| `retriever.py` | `ComplaintRetriever` | Loads ChromaDB, embeds queries, retrieves top-k chunks |
+| `generator.py` | `LLMGenerator` | Connects to Groq API, sends prompt, returns answer |
+| `rag_pipeline.py` | `RAGPipeline` | Single `pipeline.ask()` call wires all three modules |
+
+**LLM:** LLaMA 3.1 8B Instant via [Groq API](https://console.groq.com) (free tier, HTTP-based).
+> HuggingFace and Google Gemini gRPC were blocked by network firewall — Groq's standard HTTPS resolved this.
+
+**Prompt design:** LLM instructed to answer only from retrieved context and state when it lacks sufficient information — prevents hallucination.
+
+**Qualitative evaluation (7 test questions):**
+
+| Question | Score | Notes |
+|----------|-------|-------|
+| Why are people unhappy with credit cards? | 4/5 | Good multi-issue synthesis |
+| What are the main problems with savings accounts? | 5/5 | Cited specific dollar amounts and consequences |
+| What issues do customers face with money transfers? | 4/5 | Correct product category throughout |
+| What are the most common personal loan complaints? | 3/5 | Only 122 records — limited diversity |
+| How do customers describe customer service? | 5/5 | Specific behaviors cited from real complaint language |
+| What fraud issues are customers reporting? | 5/5 | Multiple fraud vectors with real consequences |
+| What billing problems do credit card customers face? | 4/5 | Good answer; retrieval diversity could improve |
+| **Average** | **4.3 / 5** | |
 
 ---
 
-### 🔲 Task 4 — Interactive Gradio UI (`app.py`)
+### ✅ Task 4 — Interactive Gradio UI (`app.py`)
 
-**Goal:** Build a user-friendly interface for non-technical stakeholders.
+**Goal:** Build a premium, user-friendly interface for non-technical stakeholders.
 
-**Planned:**
-- Text input box for natural-language questions
-- Submit button and AI-generated answer display
-- Source complaint chunks shown below each answer (for trust and verification)
+**Design:** Dark luxury fintech aesthetic — black background, gold accents (`#c9a96e`), Playfair Display serif typography.
+
+**Features:**
+- Sticky navigation bar with product category pills and Internal Tool badge
+- Hero section with headline, description, and live stats (464K complaints, 1.37M chunks, 4 categories, <3s response)
+- Question input with gold focus border and gold caret
+- Gold gradient Analyze button with hover lift effect
+- AI-generated answer in a themed dark card with gold header
+- Color-coded source cards by product (gold=Credit Card, blue=Savings, green=Money Transfer, pink=Personal Loan)
 - Clear button to reset the conversation
-- Optional: streaming responses token-by-token
+- Tech stack footer (RAG · ChromaDB · LLaMA 3.1 · all-MiniLM-L6-v2)
 
 ---
 
@@ -168,22 +197,37 @@ source venv/bin/activate
 pip install -r requirements.txt
 ```
 
-### 4. Add the data files
-Download the CFPB dataset files from the 10 Academy resource portal and place them here:
+### 4. Add your API key
+Create a `.env` file in the project root:
+```
+GROQ_API_KEY=your_groq_api_key_here
+```
+Get a free key at [console.groq.com](https://console.groq.com)
+
+### 5. Add the data files
+Download the CFPB dataset files from the 10 Academy resource portal:
 ```
 data/raw/complaints.csv
 data/raw/complaint_embeddings.parquet
 ```
 
-### 5. Run the notebooks in order
+### 6. Run the notebooks in order
 ```
 notebooks/eda_preprocessing.ipynb      ← Task 1
 notebooks/chunking_embedding.ipynb     ← Task 2
+notebooks/rag_test.ipynb               ← Task 3 testing
 ```
 
-### 6. Run the app (Task 4, after Task 3 is complete)
+### 7. Run the app
 ```bash
 python app.py
+```
+Opens at `http://127.0.0.1:7860`
+
+For a temporary public link (72 hours):
+```python
+# In app.py, change:
+app.launch(share=True)
 ```
 
 ---
@@ -196,8 +240,8 @@ python app.py
 | Text chunking | LangChain (`langchain-text-splitters`) |
 | Embedding model | `sentence-transformers/all-MiniLM-L6-v2` |
 | Vector database | ChromaDB |
-| LLM (Task 3) | Mistral / Llama via HuggingFace |
-| UI (Task 4) | Gradio |
+| LLM | LLaMA 3.1 8B Instant via Groq API |
+| UI | Gradio |
 | Visualization | matplotlib, seaborn |
 | CI/CD | GitHub Actions |
 
@@ -218,9 +262,10 @@ The CFPB dataset replaces all personally identifiable information with `XXXX` be
 
 Every push to any branch triggers the GitHub Actions pipeline (`.github/workflows/unittests.yml`):
 1. Sets up Python 3.10
-2. Installs all dependencies from `requirements.txt`
-3. Runs `flake8` linting on `src/` and `tests/`
-4. Runs `pytest` unit tests from `tests/`
+2. Caches pip dependencies
+3. Installs all dependencies from `requirements.txt`
+4. Runs `flake8` linting on `src/` and `tests/`
+5. Runs `pytest` unit tests from `tests/`
 
 ---
 
